@@ -4,13 +4,13 @@ This document is the current release-oriented status for the Premier League pred
 
 ## Current status
 
-Phases 0 through 8 are implemented on the current `main` branch. The production classifier is selected by Ranked Probability Score (RPS), not raw accuracy. The current held-out benchmark is:
+Phases 0 through 8 are implemented in the current release candidate. The production classifier is selected by Ranked Probability Score (RPS), not raw accuracy. The current held-out benchmark is sourced from `models/metrics.json`:
 
 | Model | RPS | Accuracy | Goal MAE | Status |
 | :--- | ---: | ---: | ---: | :--- |
-| Random Forest | 0.2068 | 46.6% | 0.90 | Production |
-| XGBoost | 0.2085 | 48.7% | 0.89 | Benchmark |
-| Stacked | 0.2076 | 47.2% | 0.89 | Benchmark |
+| Random Forest | 0.2048 | 48.3% | 0.91 | Benchmark |
+| XGBoost | 0.2051 | 48.7% | 0.92 | Benchmark |
+| Stacked | 0.2044 | 48.9% | 0.89 | Production |
 
 These are time-ordered validation results, not a guarantee of future match accuracy. The dashboard distinguishes recorded scores from projected fixtures; projected fixtures must never be presented as observed results.
 
@@ -58,7 +58,7 @@ Before publishing a refreshed forecast or model:
 
 1. Run the offline pipeline when the cached source data is sufficient.
 2. Regenerate the web dataset with `.venv\Scripts\python.exe export_web_data.py`.
-3. Confirm generated CSV, Markdown, JSON, metrics, and PNG artifacts are synchronized.
+3. Confirm generated CSV, Markdown, JSON, metrics, and PNG artifacts are synchronized. Validate forecast labels with the shared draw-decision rule rather than assuming the raw probability argmax is always the published outcome.
 4. Run `.venv\Scripts\python.exe -m pytest tests/ -v` from the repository root.
 5. Run `npm run build` from `web/`.
 6. Inspect the dashboard at desktop and narrow phone widths, including Analytics diagnostics and tables.
