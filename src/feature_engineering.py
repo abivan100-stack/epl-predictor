@@ -14,6 +14,11 @@ import numpy as np
 import pandas as pd
 
 WINDOWS: List[int] = [3, 5, 10]
+EWM_SPANS: List[int] = [5, 10]
+EWM_METRICS: List[str] = [
+    "goals_for", "goals_against", "goal_diff", "shots_for",
+    "shots_target_for", "points",
+]
 
 
 def _chronological(df: pd.DataFrame, *extra_keys: str) -> pd.DataFrame:
@@ -42,6 +47,12 @@ LEAGUE_DEFAULTS: Dict[str, float] = {
     "roll_shots_target_for": 4.0,
     "roll_possession": 50.0,
     "roll_points": 1.35,
+    "ewm_goals_for": 1.35,
+    "ewm_goals_against": 1.35,
+    "ewm_goal_diff": 0.0,
+    "ewm_shots_for": 12.0,
+    "ewm_shots_target_for": 4.0,
+    "ewm_points": 1.35,
     "venue_roll_goals_for": 1.45,
     "venue_roll_goals_against": 1.35,
     "venue_roll_points": 1.45,
@@ -497,6 +508,16 @@ def compute_team_rolling_features(team_df: pd.DataFrame) -> pd.DataFrame:
                 .transform(lambda s: s.shift(1).rolling(w, min_periods=1).mean())
             )
 
+    # Exponentially weighted form reacts faster than fixed windows while
+    # remaining strictly pre-match: shift before ewm so the current result
+    # can never influence its own feature row.
+    for span in EWM_SPANS:
+        for m in EWM_METRICS:
+            team_df[f"ewm_{m}_{span}"] = (
+                team_df.groupby("team")[m]
+                .transform(lambda s: s.shift(1).ewm(span=span, adjust=False, min_periods=1).mean())
+            )
+
     # Venue-specific rolling metrics (home form for home games, away form for away games)
     team_df = team_df.sort_values(by=["team", "is_home", "date", "match_id"], kind="mergesort").reset_index(drop=True)
     venue_metrics = ["goals_for", "goals_against", "points"]
@@ -657,7 +678,11 @@ def build_engineered_dataset(
     away_feats = team_features[team_features["is_home"] == 0].copy()
 
     # Prefix columns
-    feat_cols = [c for c in home_feats.columns if c.startswith("roll_") or c.startswith("venue_roll_") or c in ("rest_days", "congestion_14d")]
+    feat_cols = [
+        c for c in home_feats.columns
+        if c.startswith("roll_") or c.startswith("venue_roll_") or c.startswith("ewm_")
+        or c in ("rest_days", "congestion_14d")
+    ]
 
     home_rename = {c: f"home_{c}" for c in feat_cols}
     away_rename = {c: f"away_{c}" for c in feat_cols}
@@ -800,6 +825,9 @@ def get_feature_column_names() -> List[str]:
         for w in WINDOWS:
             for m in ["goals_for", "goals_against", "goal_diff", "shots_for", "shots_target_for", "possession", "points"]:
                 cols.append(f"{side}_roll_{m}_{w}")
+        for span in EWM_SPANS:
+            for m in EWM_METRICS:
+                cols.append(f"{side}_ewm_{m}_{span}")
         for m in ["goals_for", "goals_against", "points"]:
             cols.append(f"{side}_venue_roll_{m}_5")
 
@@ -933,6 +961,13 @@ def build_fixture_features(
                 stats[f"roll_shots_target_for_{w}"] = p_info["target_baseline"]
                 stats[f"roll_possession_{w}"] = p_info["poss_baseline"]
                 stats[f"roll_points_{w}"] = p_info["points_baseline"]
+            for span in EWM_SPANS:
+                stats[f"ewm_goals_for_{span}"] = p_info["gf_baseline"]
+                stats[f"ewm_goals_against_{span}"] = p_info["ga_baseline"]
+                stats[f"ewm_goal_diff_{span}"] = p_info["gf_baseline"] - p_info["ga_baseline"]
+                stats[f"ewm_shots_for_{span}"] = p_info["shots_baseline"]
+                stats[f"ewm_shots_target_for_{span}"] = p_info["target_baseline"]
+                stats[f"ewm_points_{span}"] = p_info["points_baseline"]
             stats["venue_roll_goals_for_5"] = p_info["gf_baseline"]
             stats["venue_roll_goals_against_5"] = p_info["ga_baseline"]
             stats["venue_roll_points_5"] = p_info["points_baseline"]
@@ -962,6 +997,12 @@ def build_fixture_features(
             stats[f"roll_shots_target_for_{w}"] = float(recent_w["shots_target_for"].mean())
             stats[f"roll_possession_{w}"] = float(recent_w["possession"].mean())
             stats[f"roll_points_{w}"] = float(recent_w["points"].mean())
+        for span in EWM_SPANS:
+            for metric in EWM_METRICS:
+                values = sub[metric].astype(float)
+                stats[f"ewm_{metric}_{span}"] = float(
+                    values.ewm(span=span, adjust=False, min_periods=1).mean().iloc[-1]
+                )
 
         # Venue specific: raw venue means; fall back to overall rolling when
         # the side has no history at this venue (matches training, where a

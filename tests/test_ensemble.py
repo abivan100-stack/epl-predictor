@@ -9,9 +9,30 @@ from src.models import (
     EloPoissonModel,
     MatchPredictorModel,
     StackedEnsembleModel,
+    blend_market_probabilities,
+    fit_goal_calibration,
     favor_outcome_from_proba,
     train_stacked_ensemble,
 )
+
+
+def test_market_blend_maps_bookmaker_home_draw_away_to_model_order():
+    model = np.array([[0.30, 0.20, 0.50]])
+    market_hda = np.array([[0.60, 0.25, 0.15]])
+
+    blended = blend_market_probabilities(model, market_hda, np.array([0.0]), np.array([0.5]))
+
+    np.testing.assert_allclose(blended, [[0.225, 0.225, 0.55]])
+
+
+def test_goal_calibration_is_bounded_and_uses_observed_to_predicted_ratio():
+    home, away = fit_goal_calibration(
+        np.array([1.0, 2.0]), np.array([1.0, 1.0]),
+        np.array([2.0, 2.0]), np.array([0.5, 1.0]),
+    )
+
+    assert home == 1.25
+    assert away == 0.8
 
 
 def _frames(n_train=120, n_val=40, seed=5):

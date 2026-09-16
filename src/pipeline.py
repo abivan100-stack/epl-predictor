@@ -209,6 +209,15 @@ class PremierLeaguePredictionPipeline:
         # keeping the evaluation tail untouched.
         calibration_slice, _ = split_calibration_evaluation(len(val_df))
         if calibration_slice.stop:
+            self.best_model.calibrate_goals(
+                val_df[self.feature_cols].iloc[calibration_slice],
+                val_df["target_home_goals"].iloc[calibration_slice],
+                val_df["target_away_goals"].iloc[calibration_slice],
+            )
+            self.best_model.calibrate_market_blend(
+                val_df[self.feature_cols].iloc[calibration_slice],
+                val_df["target_outcome"].iloc[calibration_slice],
+            )
             self.best_model.calibrate_outcome(
                 val_df[self.feature_cols].iloc[calibration_slice],
                 val_df["target_outcome"].iloc[calibration_slice],
@@ -236,6 +245,8 @@ class PremierLeaguePredictionPipeline:
                 "calibration_method": getattr(self.best_model, "calibration_method", "temperature"),
                 "home_goal_correction": getattr(self.best_model, "home_goal_correction", 1.0),
                 "away_goal_correction": getattr(self.best_model, "away_goal_correction", 1.0),
+                "market_blend_weight": getattr(self.best_model, "market_blend_weight", 0.0),
+                "no_market_blend_weight": getattr(self.best_model, "no_market_blend_weight", 0.0),
                 "feature_count": len(self.feature_cols),
                 "models": {
                     name: {

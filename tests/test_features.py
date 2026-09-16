@@ -12,8 +12,30 @@ from src.feature_engineering import (
     build_engineered_dataset,
     build_fixture_features,
     recency_weights,
+    compute_team_rolling_features,
 )
 from src.models import EloPoissonModel, MatchPredictorModel
+
+
+def test_exponentially_weighted_form_uses_only_prior_matches():
+    team_df = pd.DataFrame({
+        "team": ["Arsenal"] * 3,
+        "date": pd.date_range("2024-01-01", periods=3, freq="7D"),
+        "match_id": [1, 2, 3],
+        "is_home": [1, 1, 1],
+        "goals_for": [1.0, 3.0, 5.0],
+        "goals_against": [1.0, 1.0, 1.0],
+        "goal_diff": [0.0, 2.0, 4.0],
+        "shots_for": [10.0, 12.0, 14.0],
+        "shots_target_for": [3.0, 4.0, 5.0],
+        "possession": [50.0, 55.0, 60.0],
+        "points": [1.0, 3.0, 3.0],
+    })
+
+    result = compute_team_rolling_features(team_df)
+
+    assert result.loc[0, "ewm_goals_for_5"] != result.loc[0, "goals_for"]
+    assert result.loc[1, "ewm_goals_for_5"] == result.loc[0, "goals_for"]
 
 
 def _mini_history(n=6, start="2024-01-01", home="Arsenal", away="Chelsea"):
@@ -71,7 +93,7 @@ def test_travel_unknown_club_falls_back():
 
 
 def test_feature_count_includes_phase4():
-    assert len(get_feature_column_names()) == 88
+    assert len(get_feature_column_names()) == 112
     cols = get_feature_column_names()
     for col in ("home_congestion_14d", "away_congestion_14d",
                 "diff_congestion_14d", "away_travel_km"):

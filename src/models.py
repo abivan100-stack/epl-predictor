@@ -40,6 +40,42 @@ def _rps_loss(probas: np.ndarray, y: np.ndarray) -> float:
     return float(np.mean(np.sum((cumulative - np.cumsum(truth, axis=1)) ** 2, axis=1) / 2.0))
 
 
+def blend_market_probabilities(
+    model_probas: np.ndarray,
+    market_home_draw_away: np.ndarray,
+    odds_missing: np.ndarray,
+    market_weight: np.ndarray,
+) -> np.ndarray:
+    """Blends model [Away, Draw, Home] with market [Home, Draw, Away]."""
+    model = np.asarray(model_probas, dtype=float)
+    market = np.asarray(market_home_draw_away, dtype=float)[:, [2, 1, 0]]
+    missing = np.asarray(odds_missing, dtype=float).reshape(-1)
+    weights = np.asarray(market_weight, dtype=float).reshape(-1)
+    if model.shape != market.shape or model.shape[1] != 3 or len(missing) != len(model) or len(weights) != len(model):
+        raise ValueError("Model, market, missing, and weight arrays must have matching rows and three probability columns.")
+    weights = np.clip(weights, 0.0, 1.0) * (missing < 0.5)
+    blended = (1.0 - weights[:, None]) * model + weights[:, None] * market
+    return blended / np.maximum(blended.sum(axis=1, keepdims=True), 1e-12)
+
+
+def fit_goal_calibration(
+    predicted_home: np.ndarray,
+    predicted_away: np.ndarray,
+    actual_home: np.ndarray,
+    actual_away: np.ndarray,
+) -> Tuple[float, float]:
+    """Fits bounded multiplicative goal corrections from held-out predictions."""
+    pred_h = np.maximum(0.05, np.asarray(predicted_home, dtype=float))
+    pred_a = np.maximum(0.05, np.asarray(predicted_away, dtype=float))
+    true_h = np.asarray(actual_home, dtype=float)
+    true_a = np.asarray(actual_away, dtype=float)
+    if not (len(pred_h) == len(pred_a) == len(true_h) == len(true_a)) or len(pred_h) == 0:
+        return 1.0, 1.0
+    home = float(np.clip(np.mean(true_h) / max(1e-6, np.mean(pred_h)), 0.8, 1.25))
+    away = float(np.clip(np.mean(true_a) / max(1e-6, np.mean(pred_a)), 0.8, 1.25))
+    return home, away
+
+
 def align_probas(classes, probas: np.ndarray, n_classes: int = 3) -> np.ndarray:
     """Aligns predict_proba output to the full [Away, Draw, Home] columns.
 
@@ -399,6 +435,8 @@ class MatchPredictorModel:
         # means): counters systematic under/over-prediction of Poisson means.
         self.home_goal_correction: float = 1.0
         self.away_goal_correction: float = 1.0
+        self.market_blend_weight: float = 0.0
+        self.no_market_blend_weight: float = 0.0
 
     def apply_params(self, params: Dict[str, Any]) -> MatchPredictorModel:
         """Applies hyperparameter overrides to classifier + regressors.
@@ -421,6 +459,8 @@ class MatchPredictorModel:
     def fit(self, X: pd.DataFrame, y_outcome: pd.Series, y_hg: pd.Series, y_ag: pd.Series, sample_weight=None) -> MatchPredictorModel:
         """Fits the outcome classifier and all four goal regressors."""
         self.feature_names = list(X.columns)
+        self.market_blend_weight = 0.0
+        self.no_market_blend_weight = 0.0
         self.calibrated_classifier = None
         self.calibration_method = "temperature"
         self.calibration_scores = {}
@@ -439,15 +479,65 @@ class MatchPredictorModel:
             pred_a = np.maximum(0.05, np.asarray(self.away_regressor.predict(X), dtype=float))
             true_h = np.asarray(y_hg, dtype=float)
             true_a = np.asarray(y_ag, dtype=float)
-            ch = float(np.mean(true_h) / max(1e-6, float(np.mean(pred_h))))
-            ca = float(np.mean(true_a) / max(1e-6, float(np.mean(pred_a))))
-            self.home_goal_correction = float(np.clip(ch, 0.8, 1.25))
-            self.away_goal_correction = float(np.clip(ca, 0.8, 1.25))
+            self.home_goal_correction, self.away_goal_correction = fit_goal_calibration(
+                pred_h, pred_a, true_h, true_a
+            )
         except Exception:
             self.home_goal_correction = 1.0
             self.away_goal_correction = 1.0
         self.is_fitted = True
         return self
+
+    def calibrate_goals(self, X_cal: pd.DataFrame, y_hg, y_ag) -> Tuple[float, float]:
+        """Fits bounded goal corrections on a calibration slice only."""
+        if len(X_cal) == 0:
+            return self.home_goal_correction, self.away_goal_correction
+        if self.home_regressor is None or self.away_regressor is None:
+            pred_h, pred_a = self.predict_expected_goals(X_cal)
+        else:
+            pred_h = np.maximum(0.05, np.asarray(self.home_regressor.predict(X_cal), dtype=float))
+            pred_a = np.maximum(0.05, np.asarray(self.away_regressor.predict(X_cal), dtype=float))
+        self.home_goal_correction, self.away_goal_correction = fit_goal_calibration(
+            pred_h, pred_a, np.asarray(y_hg, dtype=float), np.asarray(y_ag, dtype=float)
+        )
+        return self.home_goal_correction, self.away_goal_correction
+
+    def calibrate_market_blend(self, X_cal: pd.DataFrame, y_cal: pd.Series) -> Tuple[float, float]:
+        """Learns market blend weight on calibration rows using RPS only."""
+        required = {"odds_implied_home", "odds_implied_draw", "odds_implied_away", "odds_missing"}
+        if len(X_cal) == 0 or not required.issubset(X_cal.columns):
+            self.market_blend_weight = 0.0
+            self.no_market_blend_weight = 0.0
+            return 0.0, 0.0
+        base = self.predict_outcome_proba(X_cal, apply_temperature=False)
+        market = X_cal[["odds_implied_home", "odds_implied_draw", "odds_implied_away"]].to_numpy(dtype=float)
+        missing = X_cal["odds_missing"].to_numpy(dtype=float)
+        y = np.asarray(y_cal, dtype=int)
+        from src.config import get_config
+        cfg = get_config().get("model", {})
+        step = max(0.01, float(cfg.get("market_blend_grid_step", 0.05)))
+        maximum = float(np.clip(cfg.get("market_blend_max_weight", 0.50), 0.0, 1.0))
+        present = missing < 0.5
+        best_weight, best_score = 0.0, float("inf")
+        for weight in np.arange(0.0, maximum + step / 2.0, step):
+            candidate = blend_market_probabilities(
+                base, market, missing, np.full(len(base), float(weight))
+            )
+            score = _rps_loss(candidate[present], y[present]) if present.any() else float("inf")
+            if score < best_score:
+                best_score, best_weight = score, float(round(weight, 4))
+        self.market_blend_weight = best_weight
+        self.no_market_blend_weight = 0.0
+        return self.market_blend_weight, self.no_market_blend_weight
+
+    def _apply_market_blend(self, probas: np.ndarray, X: pd.DataFrame) -> np.ndarray:
+        required = {"odds_implied_home", "odds_implied_draw", "odds_implied_away", "odds_missing"}
+        if not required.issubset(X.columns):
+            return probas
+        missing = X["odds_missing"].to_numpy(dtype=float)
+        weights = np.where(missing < 0.5, self.market_blend_weight, self.no_market_blend_weight)
+        market = X[["odds_implied_home", "odds_implied_draw", "odds_implied_away"]].to_numpy(dtype=float)
+        return blend_market_probabilities(probas, market, missing, weights)
 
     def calibrate_temperature(self, X_val: pd.DataFrame, y_val: pd.Series) -> float:
         """Fits temperature scaling on validation blended probabilities.
@@ -507,14 +597,15 @@ class MatchPredictorModel:
             return blended / blended.sum(axis=1, keepdims=True)
 
         self.calibrate_temperature(fit_X, fit_y)
-        scores = {"temperature": _rps_loss(self._apply_temperature(_blend(raw_sources["clf"]), self.calibration_temperature), score_y)}
+        temperature_base = self._apply_market_blend(_blend(raw_sources["clf"]), score_X)
+        scores = {"temperature": _rps_loss(self._apply_temperature(temperature_base, self.calibration_temperature), score_y)}
         candidates = {}
         for method in ("sigmoid", "isotonic"):
             try:
                 candidate = CalibratedClassifierCV(self.classifier, method=method, cv="prefit")
                 candidate.fit(fit_X, fit_y)
                 calibrated = align_probas(candidate.classes_, candidate.predict_proba(score_X))
-                scores[method] = _rps_loss(_blend(calibrated), score_y)
+                scores[method] = _rps_loss(self._apply_market_blend(_blend(calibrated), score_X), score_y)
                 candidates[method] = candidate
             except (ValueError, TypeError, RuntimeError):
                 scores[method] = float("inf")
@@ -611,6 +702,7 @@ class MatchPredictorModel:
         )
         blended /= blended.sum(axis=1, keepdims=True)
 
+        blended = self._apply_market_blend(blended, X)
         if apply_temperature and self.calibration_method == "temperature" and self.calibration_temperature != 1.0:
             blended = self._apply_temperature(blended, self.calibration_temperature)
         return blended
@@ -688,6 +780,8 @@ class MatchPredictorModel:
             "calibrated_classifier": self.calibrated_classifier,
             "home_goal_correction": self.home_goal_correction,
             "away_goal_correction": self.away_goal_correction,
+            "market_blend_weight": self.market_blend_weight,
+            "no_market_blend_weight": self.no_market_blend_weight,
         }
         joblib.dump(payload, filepath, compress=3)
         return filepath
@@ -720,6 +814,8 @@ class MatchPredictorModel:
         instance.calibrated_classifier = payload.get("calibrated_classifier")
         instance.home_goal_correction = float(payload.get("home_goal_correction", 1.0))
         instance.away_goal_correction = float(payload.get("away_goal_correction", 1.0))
+        instance.market_blend_weight = float(payload.get("market_blend_weight", 0.0))
+        instance.no_market_blend_weight = float(payload.get("no_market_blend_weight", 0.0))
         return instance
 
 
@@ -754,6 +850,15 @@ def _score_benchmark_model(
     from src.evaluate import ranked_probability_score
 
     calibration_slice, evaluation_slice = split_calibration_evaluation(len(X_val))
+    if calibration_slice.stop:
+        model.calibrate_goals(
+            X_val.iloc[calibration_slice],
+            y_val_hg.iloc[calibration_slice],
+            y_val_ag.iloc[calibration_slice],
+        )
+        model.calibrate_market_blend(
+            X_val.iloc[calibration_slice], y_val_outcome.iloc[calibration_slice]
+        )
     if calibration_slice.stop:
         try:
             model.calibrate_outcome(
@@ -839,6 +944,8 @@ def _score_benchmark_model(
         "calibration_scores": getattr(model, "calibration_scores", {}),
         "home_goal_correction": model.home_goal_correction,
         "away_goal_correction": model.away_goal_correction,
+        "market_blend_weight": getattr(model, "market_blend_weight", 0.0),
+        "no_market_blend_weight": getattr(model, "no_market_blend_weight", 0.0),
         "eval_y_outcome": eval_y_outcome.values,
         "eval_y_home_goals": eval_y_hg.values,
         "eval_y_away_goals": eval_y_ag.values,
@@ -925,6 +1032,8 @@ class EloPoissonModel:
         self.calibration_scores: Dict[str, float] = {}
         self.home_goal_correction: float = 1.0
         self.away_goal_correction: float = 1.0
+        self.market_blend_weight: float = 0.0
+        self.no_market_blend_weight: float = 0.0
         self.feature_names: List[str] = []
         self.is_fitted: bool = False
 
@@ -1067,6 +1176,8 @@ class StackedEnsembleModel(MatchPredictorModel):
         self.calibration_scores: Dict[str, float] = {}
         self.home_goal_correction: float = 1.0
         self.away_goal_correction: float = 1.0
+        self.market_blend_weight: float = 0.0
+        self.no_market_blend_weight: float = 0.0
 
     def _stack_probas(self, X: pd.DataFrame) -> np.ndarray:
         """Concatenates calibrated member probas in STACK_MEMBER_ORDER."""
@@ -1083,6 +1194,8 @@ class StackedEnsembleModel(MatchPredictorModel):
     ) -> StackedEnsembleModel:
         """Refits members on new data; meta weights stay frozen."""
         self.feature_names = list(X.columns)
+        self.market_blend_weight = 0.0
+        self.no_market_blend_weight = 0.0
         for key in STACK_MEMBER_ORDER:
             member = self.members[key]
             spec = self.member_specs.get(key, {})
@@ -1096,6 +1209,7 @@ class StackedEnsembleModel(MatchPredictorModel):
         """Meta-learner probabilities over member probabilities."""
         stacked = self._stack_probas(X)
         blended = align_probas(self.meta.classes_, self.meta.predict_proba(stacked))
+        blended = self._apply_market_blend(blended, X)
         if apply_temperature and self.calibration_method == "temperature" and self.calibration_temperature != 1.0:
             blended = self._apply_temperature(blended, self.calibration_temperature)
         return blended
@@ -1137,6 +1251,8 @@ class StackedEnsembleModel(MatchPredictorModel):
             "calibration_scores": self.calibration_scores,
             "home_goal_correction": self.home_goal_correction,
             "away_goal_correction": self.away_goal_correction,
+            "market_blend_weight": self.market_blend_weight,
+            "no_market_blend_weight": self.no_market_blend_weight,
         }
         joblib.dump(payload, filepath, compress=3)
         return filepath
@@ -1157,6 +1273,8 @@ class StackedEnsembleModel(MatchPredictorModel):
         instance.calibration_scores = dict(payload.get("calibration_scores", {}))
         instance.home_goal_correction = float(payload.get("home_goal_correction", 1.0))
         instance.away_goal_correction = float(payload.get("away_goal_correction", 1.0))
+        instance.market_blend_weight = float(payload.get("market_blend_weight", 0.0))
+        instance.no_market_blend_weight = float(payload.get("no_market_blend_weight", 0.0))
         return instance
 
 

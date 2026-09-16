@@ -37,3 +37,6 @@ model:
   # 0.2084, 365d 0.2068): 365d wins. Falsy disables (uniform weights).
   recency_half_life_days: 365
   odds_mask_rate: 0.15
+  market_blend_grid_step: 0.05
+  market_blend_max_weight: 0.50
+  ewm_spans: [5, 10]
