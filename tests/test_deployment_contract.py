@@ -14,6 +14,15 @@ def test_vercel_configuration_builds_the_web_dashboard_from_repository_root():
     assert config["outputDirectory"] == "web/dist"
 
 
+def test_vercel_configuration_serves_direct_dashboard_routes_through_the_spa_entrypoint():
+    config = json.loads((REPOSITORY_ROOT / "vercel.json").read_text(encoding="utf-8"))
+
+    assert {
+        "source": "/((?!assets/|visuals/|sw\\.js$).*)",
+        "destination": "/index.html",
+    } in config["rewrites"]
+
+
 def test_vercel_configuration_does_not_publish_backend_functions_accidentally():
     config = json.loads((REPOSITORY_ROOT / "vercel.json").read_text(encoding="utf-8"))
 

@@ -9567,46 +9567,46 @@
     }
   ],
   "benchmark": {
-    "productionModel": "Random Forest",
+    "productionModel": "Stacked",
     "models": [
       {
         "name": "Random Forest",
-        "isProduction": true,
-        "rps": 0.2068,
-        "accuracy": 46.6,
-        "macroF1": 0.432,
-        "logLoss": 1.016,
+        "isProduction": false,
+        "rps": 0.2048,
+        "accuracy": 48.3,
+        "macroF1": 0.442,
+        "logLoss": 1.009,
         "homeGoalMae": 0.94,
-        "awayGoalMae": 0.85,
-        "avgGoalMae": 0.9,
-        "within1Goal": 59.3,
-        "exactScoreAcc": 10.6
+        "awayGoalMae": 0.88,
+        "avgGoalMae": 0.91,
+        "within1Goal": 60.4,
+        "exactScoreAcc": 11.0
       },
       {
         "name": "XGBoost",
         "isProduction": false,
-        "rps": 0.2085,
+        "rps": 0.2051,
         "accuracy": 48.7,
-        "macroF1": 0.403,
-        "logLoss": 1.026,
-        "homeGoalMae": 0.93,
-        "awayGoalMae": 0.84,
-        "avgGoalMae": 0.89,
-        "within1Goal": 55.3,
-        "exactScoreAcc": 10.6
+        "macroF1": 0.431,
+        "logLoss": 1.011,
+        "homeGoalMae": 0.94,
+        "awayGoalMae": 0.89,
+        "avgGoalMae": 0.92,
+        "within1Goal": 62.9,
+        "exactScoreAcc": 10.0
       },
       {
         "name": "Stacked",
-        "isProduction": false,
-        "rps": 0.2076,
-        "accuracy": 47.2,
-        "macroF1": 0.415,
-        "logLoss": 1.016,
+        "isProduction": true,
+        "rps": 0.2044,
+        "accuracy": 48.9,
+        "macroF1": 0.447,
+        "logLoss": 1.006,
         "homeGoalMae": 0.94,
         "awayGoalMae": 0.84,
         "avgGoalMae": 0.89,
-        "within1Goal": 57.2,
-        "exactScoreAcc": 10.2
+        "within1Goal": 58.3,
+        "exactScoreAcc": 11.2
       }
     ],
     "topFeatures": [
@@ -18480,7 +18480,7 @@
     ]
   },
   "meta": {
-    "productionModel": "Random Forest",
+    "productionModel": "Stacked",
     "generatedBy": "export_web_data.py (live pipeline metrics)"
   }
 }

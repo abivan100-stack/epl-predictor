@@ -24,6 +24,8 @@ import { RingChart } from "./components/charts/ring-chart";
 import { Ring } from "./components/charts/ring";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { Badge } from "./components/ui/badge";
+import { LandingPage } from "./components/landing/LandingPage";
+import { appRouteForPath, pathForAppRoute, type AppRoute } from "./lib/appRoute";
 
 type Tab = "fixtures" | "simulator" | "standings" | "clubs" | "analytics";
 type SortKey =
@@ -1351,8 +1353,12 @@ const AnalyticsPage: React.FC<{ dataset: EPLDataset }> = ({ dataset }) => {
   );
 };
 
-const Dashboard: React.FC<{ dataset: EPLDataset }> = ({ dataset }) => {
-  const [activeTab, setActiveTab] = useState<Tab>("fixtures");
+const Dashboard: React.FC<{
+  dataset: EPLDataset;
+  initialTab: Tab;
+  onNavigate: (route: AppRoute) => void;
+}> = ({ dataset, initialTab, onNavigate }) => {
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedClub, setSelectedClub] = useState("Arsenal");
@@ -1361,6 +1367,11 @@ const Dashboard: React.FC<{ dataset: EPLDataset }> = ({ dataset }) => {
     home: "Arsenal",
     away: "Chelsea",
   });
+  useEffect(() => setActiveTab(initialTab), [initialTab]);
+  const navigateTo = (tab: Tab) => {
+    setActiveTab(tab);
+    onNavigate(tab);
+  };
   const searchRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onPointer = (event: PointerEvent) => {
@@ -1386,18 +1397,18 @@ const Dashboard: React.FC<{ dataset: EPLDataset }> = ({ dataset }) => {
     setSelectedClub(club);
     setQuery("");
     setSearchOpen(false);
-    setActiveTab("clubs");
+    navigateTo("clubs");
   };
   const goHome = () => {
     setQuery("");
     setSearchOpen(false);
-    setActiveTab("fixtures");
+    navigateTo("fixtures");
   };
   const openSimulator = (home: string, away: string) => {
     setSimulatorSelection({ home, away });
     setQuery("");
     setSearchOpen(false);
-    setActiveTab("simulator");
+    navigateTo("simulator");
   };
   const clubHits = query
     ? Object.values(dataset.teams)
@@ -1439,7 +1450,7 @@ const Dashboard: React.FC<{ dataset: EPLDataset }> = ({ dataset }) => {
             <button
               key={tab.id}
               className={activeTab === tab.id ? "active" : ""}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => navigateTo(tab.id)}
               aria-current={activeTab === tab.id ? "page" : undefined}
             >
               <span>{tab.label}</span>
@@ -1561,10 +1572,30 @@ const Dashboard: React.FC<{ dataset: EPLDataset }> = ({ dataset }) => {
 
 export const App: React.FC = () => {
   const state = useEPLData();
+  const [route, setRoute] = useState<AppRoute>(() =>
+    appRouteForPath(window.location.pathname),
+  );
+  useEffect(() => {
+    const onPopState = () => setRoute(appRouteForPath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  const navigate = (nextRoute: AppRoute) => {
+    const nextPath = pathForAppRoute(nextRoute);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
+    setRoute(nextRoute);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
   if (state.status === "loading")
     return (
       <ErrorBoundary>
-        <AppSkeleton />
+        {route === "landing" ? (
+          <LandingPage onNavigate={navigate} />
+        ) : (
+          <AppSkeleton />
+        )}
       </ErrorBoundary>
     );
   if (state.status === "error")
@@ -1575,7 +1606,15 @@ export const App: React.FC = () => {
     );
   return (
     <ErrorBoundary>
-      <Dashboard dataset={state.dataset} />
+      {route === "landing" ? (
+        <LandingPage dataset={state.dataset} onNavigate={navigate} />
+      ) : (
+        <Dashboard
+          dataset={state.dataset}
+          initialTab={route}
+          onNavigate={navigate}
+        />
+      )}
     </ErrorBoundary>
   );
 };

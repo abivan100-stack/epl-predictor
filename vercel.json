@@ -4,6 +4,12 @@
   "installCommand": "npm --prefix web ci",
   "buildCommand": "npm --prefix web run build",
   "outputDirectory": "web/dist",
+  "rewrites": [
+    {
+      "source": "/((?!assets/|visuals/|sw\\.js$).*)",
+      "destination": "/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/assets/(.*)",
